@@ -8,25 +8,20 @@ compatibility_date = "2024-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "apollo-agent-registry"
-database_id = "your-database-id-here" # Run: wrangler d1 create apollo-agent-registry
+database_id = "79f8b80d-3bb5-4dd4-beee-a77a1084b574"
 
 # KV Namespaces
 [[kv_namespaces]]
 binding = "AGENTS_KV"
-id = "your-kv-id-here" # Run: wrangler kv:namespace create "AGENTS_KV"
+id = "28ed114677e54e23ad10cc7901f1fd98"
 
 [[kv_namespaces]]
 binding = "HEALTH_KV"
-id = "your-kv-id-here" # Run: wrangler kv:namespace create "HEALTH_KV"
+id = "416d5f01ed5e4843b98a9e251737e219"
 
-# Cron Triggers - Run health check every 30 seconds
+# Cron Triggers - Run health check every 1 minute (Cloudflare minimum)
 [triggers]
-crons = ["*/30 * * * *"] # Every 30 seconds would be "*/1 * * * *" but Cloudflare min is 1 minute
-
-# Routes
-routes = [
-  { pattern = "apollo-health.workers.dev", zone_name = "blackroad.io" }
-]
+crons = ["* * * * *"]
 
 # Environment Variables
 [vars]

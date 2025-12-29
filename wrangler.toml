@@ -1,0 +1,41 @@
+# Apollo 30k Agent Deployment - Cloudflare Workers Configuration
+
+name = "apollo-health-monitor"
+main = "src/monitoring/health-monitor.ts"
+compatibility_date = "2024-01-01"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "apollo-agent-registry"
+database_id = "your-database-id-here" # Run: wrangler d1 create apollo-agent-registry
+
+# KV Namespaces
+[[kv_namespaces]]
+binding = "AGENTS_KV"
+id = "your-kv-id-here" # Run: wrangler kv:namespace create "AGENTS_KV"
+
+[[kv_namespaces]]
+binding = "HEALTH_KV"
+id = "your-kv-id-here" # Run: wrangler kv:namespace create "HEALTH_KV"
+
+# Cron Triggers - Run health check every 30 seconds
+[triggers]
+crons = ["*/30 * * * *"] # Every 30 seconds would be "*/1 * * * *" but Cloudflare min is 1 minute
+
+# Routes
+routes = [
+  { pattern = "apollo-health.workers.dev", zone_name = "blackroad.io" }
+]
+
+# Environment Variables
+[vars]
+HEALTH_CHECK_INTERVAL = "30s"
+MAX_RESTART_ATTEMPTS = "3"
+HEARTBEAT_THRESHOLD_MINUTES = "5"
+
+# Durable Objects for stateful agents (future)
+# [[durable_objects.bindings]]
+# name = "AGENT_STATE"
+# class_name = "AgentState"
+# script_name = "apollo-agent-state"

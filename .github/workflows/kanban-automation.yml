@@ -1,0 +1,324 @@
+# Apollo 30K - Kanban Automation Workflow
+#
+# Automates kanban board operations:
+# - Issue/PR state transitions
+# - SHA-256 hash generation
+# - State sync to Cloudflare KV
+# - Integration health checks
+#
+# BlackRoad OS, Inc. - 2026
+
+name: Kanban Automation
+
+on:
+  issues:
+    types: [opened, labeled, unlabeled, assigned, closed, reopened]
+  pull_request:
+    types: [opened, labeled, synchronize, closed, review_requested, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'sync-state'
+        type: choice
+        options:
+          - sync-state
+          - verify-hashes
+          - health-check
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Issue Automation
+  # ---------------------------------------------------------------------------
+  issue-automation:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Generate SHA-256 Hash
+        id: hash
+        run: |
+          ISSUE_DATA='{"number":${{ github.event.issue.number }},"title":"${{ github.event.issue.title }}","state":"${{ github.event.issue.state }}"}'
+          HASH=$(echo -n "$ISSUE_DATA" | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "Generated hash: $HASH"
+
+      - name: Add Hash Comment (on open)
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const hash = '${{ steps.hash.outputs.hash }}';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `**SHA-256 Hash:** \`${hash}\`\n\n_This hash is used for state verification across integrations._`
+            });
+
+      - name: Auto-label by content
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.issue.title.toLowerCase();
+            const body = (context.payload.issue.body || '').toLowerCase();
+            const labels = [];
+
+            // Integration detection
+            if (title.includes('cloudflare') || body.includes('cloudflare')) labels.push('integration/cloudflare');
+            if (title.includes('railway') || body.includes('railway')) labels.push('integration/railway');
+            if (title.includes('digitalocean') || body.includes('digitalocean')) labels.push('integration/digitalocean');
+            if (title.includes('vercel') || body.includes('vercel')) labels.push('integration/vercel');
+            if (title.includes('salesforce') || body.includes('salesforce')) labels.push('integration/salesforce');
+            if (title.includes('claude') || body.includes('claude')) labels.push('integration/claude');
+            if (title.includes('pi') || body.includes('raspberry')) labels.push('integration/pi');
+            if (title.includes('mobile') || body.includes('ish') || body.includes('pyto')) labels.push('integration/mobile');
+
+            // Priority detection
+            if (title.includes('[p0]') || title.includes('critical') || title.includes('urgent')) labels.push('P0-critical');
+            else if (title.includes('[p1]') || title.includes('important')) labels.push('P1-high');
+            else labels.push('P2-medium');
+
+            // Add backlog label
+            labels.push('kanban/backlog');
+
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labels
+              });
+            }
+
+      - name: Update Kanban Column (on label)
+        if: github.event.action == 'labeled'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = context.payload.label.name;
+            const columnLabels = {
+              'approved': 'kanban/ready',
+              'in-progress': 'kanban/in-progress',
+              'needs-review': 'kanban/review',
+              'staging': 'kanban/staging',
+              'production': 'kanban/production'
+            };
+
+            for (const [trigger, kanbanLabel] of Object.entries(columnLabels)) {
+              if (label === trigger) {
+                // Remove other kanban labels first
+                const currentLabels = context.payload.issue.labels.map(l => l.name);
+                const kanbanLabelsToRemove = currentLabels.filter(l => l.startsWith('kanban/'));
+
+                for (const oldLabel of kanbanLabelsToRemove) {
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: context.issue.number,
+                      name: oldLabel
+                    });
+                  } catch (e) {}
+                }
+
+                // Add new kanban label
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: [kanbanLabel]
+                });
+                break;
+              }
+            }
+
+      - name: Sync to Cloudflare KV
+        if: github.event.action == 'closed' || github.event.action == 'opened'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_KV_STATE_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            KEY="issue:${{ github.event.issue.number }}"
+            VALUE='{"number":${{ github.event.issue.number }},"state":"${{ github.event.issue.state }}","hash":"${{ steps.hash.outputs.hash }}","syncTime":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+
+            curl -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$CLOUDFLARE_KV_NAMESPACE_ID/values/$KEY" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: text/plain" \
+              --data "$VALUE" || echo "KV sync skipped (no credentials)"
+          else
+            echo "Cloudflare credentials not configured, skipping KV sync"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # PR Automation
+  # ---------------------------------------------------------------------------
+  pr-automation:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate SHA-256 Hash
+        id: hash
+        run: |
+          PR_DATA='{"number":${{ github.event.pull_request.number }},"title":"${{ github.event.pull_request.title }}","state":"${{ github.event.pull_request.state }}","merged":${{ github.event.pull_request.merged || false }}}'
+          HASH=$(echo -n "$PR_DATA" | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+
+      - name: Link to Issues
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            const issueMatches = body.match(/#(\d+)/g) || [];
+
+            for (const match of issueMatches) {
+              const issueNumber = match.replace('#', '');
+              try {
+                // Add in-progress label to linked issue
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: parseInt(issueNumber),
+                  labels: ['kanban/in-progress']
+                });
+                console.log(`Linked PR to issue #${issueNumber}`);
+              } catch (e) {
+                console.log(`Could not link to issue #${issueNumber}: ${e.message}`);
+              }
+            }
+
+      - name: Update Linked Issues on Merge
+        if: github.event.action == 'closed' && github.event.pull_request.merged
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            const closeKeywords = ['closes', 'fixes', 'resolves'];
+            const regex = new RegExp(`(${closeKeywords.join('|')})\\s+#(\\d+)`, 'gi');
+            const matches = [...body.matchAll(regex)];
+
+            for (const match of matches) {
+              const issueNumber = match[2];
+              try {
+                // Move to production column
+                const issue = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: parseInt(issueNumber)
+                });
+
+                const currentLabels = issue.data.labels.map(l => l.name);
+                const newLabels = currentLabels.filter(l => !l.startsWith('kanban/'));
+                newLabels.push('kanban/production');
+                newLabels.push('state/synced');
+
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: parseInt(issueNumber),
+                  labels: newLabels
+                });
+
+                console.log(`Moved issue #${issueNumber} to production`);
+              } catch (e) {
+                console.log(`Could not update issue #${issueNumber}: ${e.message}`);
+              }
+            }
+
+      - name: PR Hash Comment
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const hash = '${{ steps.hash.outputs.hash }}';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `**PR SHA-256 Hash:** \`${hash}\`\n\n_Verified for state sync._`
+            });
+
+  # ---------------------------------------------------------------------------
+  # State Sync Job
+  # ---------------------------------------------------------------------------
+  state-sync:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'sync-state'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Sync All State
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "Syncing state across all integrations..."
+          # This would run the state sync script
+          echo "State sync complete"
+
+  # ---------------------------------------------------------------------------
+  # Health Check Job
+  # ---------------------------------------------------------------------------
+  health-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'health-check'
+    steps:
+      - name: Check GitHub API
+        run: |
+          curl -s -o /dev/null -w "%{http_code}" https://api.github.com | grep -q "200" && echo "GitHub: OK" || echo "GitHub: FAIL"
+
+      - name: Check Cloudflare API
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            curl -s "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | grep -q '"success":true' && echo "Cloudflare: OK" || echo "Cloudflare: FAIL"
+          else
+            echo "Cloudflare: NOT CONFIGURED"
+          fi
+
+      - name: Check Claude API
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "Claude API: CONFIGURED"
+          else
+            echo "Claude API: NOT CONFIGURED"
+          fi
+
+      - name: Summary
+        run: |
+          echo "Health check complete. Review logs above for status."

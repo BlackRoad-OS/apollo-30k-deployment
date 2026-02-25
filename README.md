@@ -60,9 +60,50 @@ open https://agents.blackroad.io
 ## Status
 
 - [x] Phase 0: Architecture Design ✅
+- [x] Phase 0.5: Kanban Project System ✅
 - [ ] Phase 1: Foundation + 1,000 agents (In Progress)
 - [ ] Phase 2: Scale to 10,000 agents
 - [ ] Phase 3: Full 30,000 deployment
+
+---
+
+## 🗂️ Kanban Project System
+
+Salesforce-style project management integrated with GitHub Projects.
+
+### State Management Architecture
+```
+GitHub (Code) ←→ Cloudflare KV (State) ←→ Salesforce (CRM)
+        ↑              ↑                      ↑
+        └──────── SHA-256 Verification ───────┘
+```
+
+### Integrations
+| Service | Purpose | Status |
+|---------|---------|--------|
+| **Cloudflare** | Workers, KV, D1, Pages | ✅ Active |
+| **Railway** | Container orchestration | ✅ Active |
+| **DigitalOcean** | Heavy compute | ✅ Active |
+| **Vercel** | Dashboard hosting | ✅ Active |
+| **Salesforce** | CRM state management | ✅ Configured |
+| **Claude API** | AI inference | ✅ Configured |
+| **Raspberry Pi** | Edge/IoT network | ✅ Active |
+| **Termius** | SSH management | ✅ Active |
+| **iSH** | iOS shell | ✅ Compatible |
+| **Shellfish** | iOS SSH/SFTP | ✅ Compatible |
+| **Working Copy** | iOS Git | ✅ Compatible |
+| **Pyto** | iOS Python | ✅ Compatible |
+
+### Key Files
+- **[Kanban Setup](.github/PROJECT_KANBAN.md)** - Project board configuration
+- **[Agent Instructions](AGENT_INSTRUCTIONS.md)** - Instructions for AI agents
+- **[Integrations](config/integrations.ts)** - Service configurations
+- **[Hashing](src/utils/hashing.ts)** - SHA-256 & SHA Infinity
+
+### Initialize Projects
+```bash
+./scripts/initialize-projects.sh
+```
 
 ## License
 

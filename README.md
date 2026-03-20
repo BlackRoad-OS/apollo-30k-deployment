@@ -107,7 +107,7 @@ GitHub (Code) ←→ Cloudflare KV (State) ←→ Salesforce (CRM)
 
 ## License
 
-MIT License - Built with ❤️ by BlackRoad OS
+BlackRoad Proprietary License - Built with ❤️ by BlackRoad OS
 
 ---
 

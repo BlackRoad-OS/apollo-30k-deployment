@@ -34,7 +34,7 @@
     "@fastify/cors": "^9.0.0",
     "@fastify/helmet": "^13.0.2",
     "pino": "^8.17.0",
-    "zod": "^3.22.0",
+    "zod": "^4.3.6",
     "dotenv": "^17.2.3"
   },
   "devDependencies": {
